@@ -1,5 +1,4 @@
 """
-From : https://community.home-assistant.io/t/iphone-device-tracker-on-linux/13698
 Tracks iPhones by sending a udp message to port 5353.
 An entry in the arp cache is then made and checked.
 
@@ -32,18 +31,20 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 
 _LOGGER = logging.getLogger(__name__)
 
+_PATTERN = re.compile(r'^(\b(?:\d{1,3}\.){3}\d{1,3}\b) dev \w+ lladdr ((?:[0-9a-fA-F]{2}[:-]){5}(?:[0-9a-fA-F]{2})).* (STALE|REACHABLE|DELAY)$')
+
 
 class Host:
     """Host object with arp detection."""
 
-    def __init__(self, ip_address, dev_id, hass, config):
+    def __init__(self, host_name, dev_id, hass, config):
         """Initialize the Host."""
         self.hass = hass
-        self.ip_address = ip_address
+        self.ip_address = socket.gethostbyname(host_name)
         self.dev_id = dev_id
 
     def detectiphone(self):
-        """Send udp message and look for MAC address."""
+        """Send udp message and look for REACHABLE ip in ARP table."""
         aSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         aSocket.settimeout(1)
         addr = (self.ip_address, 5353)
@@ -53,24 +54,20 @@ class Host:
         try:
             output = subprocess.check_output('ip neigh show to ' + self.ip_address, shell=True)
             output = output.decode('utf-8').rstrip()
-            _LOGGER.debug(f'ip n output for {self.dev_id} is: {output}')
         except subprocess.CalledProcessError:
-            try:
-                output = subprocess.check_output('arp -na|grep ' + self.ip_address, shell=True)
-                output = output.decode('utf-8').rstrip()
-                _LOGGER.debug(f'arp output for {self.dev_id} is: {output}')
-            except subprocess.CalledProcessError:
-                _LOGGER.fatal("Could not probe network")
-                return False
-
-        mac = re.compile(r'(?:[0-9A-F]{2}[:-]){5}(?:[0-9A-F]{2})', re.IGNORECASE)
-
-        if re.findall(mac, output):
-            _LOGGER.debug(f"Device {self.dev_id} ({self.ip_address}) is HOME")
-            return True
-        else:
-            _LOGGER.debug(f"Device {self.dev_id} ({self.ip_address}) is AWAY")
+            _LOGGER.fatal("Could not probe network")
             return False
+
+        isHome = False
+
+        for line in output.split('\n'):
+            _LOGGER.debug(f'ip n output for {self.dev_id} is: {line}')
+            result = _PATTERN.search(line)
+            if result.group(1) == self.ip_address and result.group(3) == 'REACHABLE':
+                isHome = True
+
+        _LOGGER.debug(f"Device {self.dev_id} ({self.ip_address}) is {'HOME' if isHome else 'AWAY'}")
+        return isHome
 
     def update(self, see):
         """Update device state by sending one or more ping messages."""
@@ -80,7 +77,7 @@ class Host:
 
 def setup_scanner(hass, config, see, discovery_info=None):
     """Set up the Host objects and return the update function."""
-    hosts = [Host(ip, dev_id, hass, config) for (dev_id, ip) in
+    hosts = [Host(ip_or_host, dev_id, hass, config) for (dev_id, ip_or_host) in
              config[CONF_HOSTS].items()]
     interval = config.get(CONF_SCAN_INTERVAL, SCAN_INTERVAL)
 
