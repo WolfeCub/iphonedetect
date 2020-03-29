@@ -62,7 +62,12 @@ class Host:
 
         for line in output.split('\n'):
             _LOGGER.debug(f'ip n output for {self.dev_id} is: {line}')
+
             result = _PATTERN.search(line)
+
+            if not result:
+                continue
+
             status = result.group(3)
             if result.group(1) == self.ip_address and (status == 'REACHABLE' or status == 'DELAY'):
                 isHome = True
